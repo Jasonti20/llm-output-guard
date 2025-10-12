@@ -1,0 +1,46 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Logs / local data
+*.log
+*.sqlite
+*.db
+
+# Env/config secrets (keep local)
+.env
+.env.*
+!.env.example
+
+# Coverage / profiling artifacts
+.prof
+.pyre/
+.pytype/
+
+# Misc
+.ipynb_checkpoints/
