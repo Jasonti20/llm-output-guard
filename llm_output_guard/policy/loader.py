@@ -13,16 +13,27 @@ profiles:
         - "@example.com"          # any user at example.com
         - "noreply@yourco.com"    # exact match
     phone_e164:  { action: redact, severity: medium, preserve_len: false, keep_last_n: 2 }
+    
+    #Secrets (flat keys must match FindingType values)
+    secret_prefix: { action: block, severity: high }
+    jwt_token:     { action: block, severity: high }
+    pem_key:       { action: block, severity: critical }
   strict:
     credit_card: { action: block, severity: high, preserve_len: true, keep_last_n: 4 }
     ssn:         { action: block, severity: high, preserve_len: true }
     email:       { action: block, severity: medium }
     phone_e164:  { action: redact, severity: medium }
+    secret_prefix: { action: block, severity: high }
+    jwt_token:     { action: block, severity: high }
+    pem_key:       { action: block, severity: critical }
   permissive:
     credit_card: { action: block, severity: high, preserve_len: true, keep_last_n: 4 }
     ssn:         { action: block, severity: high, preserve_len: true }
     email:       { action: flag,  severity: low }
     phone_e164:  { action: flag,  severity: low }
+    secret_prefix: { action: block, severity: high }
+    jwt_token:     { action: block, severity: high }
+    pem_key:       { action: block, severity: critical }
 """
 
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 import re
-from typing import List
+from typing import List, Tuple
 from ..types import Finding, FindingType, Severity, Action
 from ..core.normalization import normalize_text, to_original_span
-
+import time
 
 # Pragmatic email pattern that avoids catastrophic backtracking
 EMAIL_RE = re.compile(
@@ -37,7 +37,12 @@ def _email_allowed(addr: str, allowlist: List[str]) -> bool:
     return False
 
 
-def scan_pii(text: str, *, email_allowlist: list[str] | None = None) -> List[Finding]:
+def scan_pii(
+    text: str,
+    *,
+    email_allowlist: list[str] | None = None,
+    deadline: float | None = None,
+) -> Tuple[List[Finding], bool]:
     """
     Normalize the text, run detectors on the normalized string, and
     map spans back to ORIGINAL indices for safe redaction.
@@ -45,9 +50,16 @@ def scan_pii(text: str, *, email_allowlist: list[str] | None = None) -> List[Fin
     norm, map_norm_to_orig, _ = normalize_text(text)
     out: List[Finding] = []
     email_allowlist = email_allowlist or []
+    timed_out = False
+
+    def _over_budget() -> bool:
+        return deadline is not None and time.perf_counter() > deadline
 
     # Emails
     for m in EMAIL_RE.finditer(norm):
+        if _over_budget():
+            timed_out = True
+            break
         ns, ne = m.span()
         os, oe = to_original_span(ns, ne, map_norm_to_orig)
         candidate = text[os:oe]
@@ -66,36 +78,44 @@ def scan_pii(text: str, *, email_allowlist: list[str] | None = None) -> List[Fin
         )
 
     # Phone numbers
-    for m in PHONE_E164_RE.finditer(norm):
-        ns, ne = m.span()
-        os, oe = to_original_span(ns, ne, map_norm_to_orig)
-        out.append(
-            Finding(
-                type=FindingType.PHONE_E164,
-                severity=Severity.MEDIUM,
-                start=os,
-                end=oe,
-                snippet=text[os:oe],
-                action_suggested=Action.REDACT,
-                norm_span=(ns, ne),
+    if not timed_out:
+        for m in PHONE_E164_RE.finditer(norm):
+            if _over_budget():
+                timed_out = True
+                break
+            ns, ne = m.span()
+            os, oe = to_original_span(ns, ne, map_norm_to_orig)
+            out.append(
+                Finding(
+                    type=FindingType.PHONE_E164,
+                    severity=Severity.MEDIUM,
+                    start=os,
+                    end=oe,
+                    snippet=text[os:oe],
+                    action_suggested=Action.REDACT,
+                    norm_span=(ns, ne),
+                )
             )
-        )
 
     # SSN (dashed & no-dash) — detect on NORMALIZED or ORIGINAL?
     # We detect on ORIGINAL here since the SSN regex is ASCII-stable.
-    for s, e, _raw in find_ssn_spans(text):
-        out.append(
-            Finding(
-                type=FindingType.SSN,
-                severity=Severity.HIGH,
-                start=s,
-                end=e,
-                snippet=text[s:e],
-                action_suggested=None,
-                norm_span=None,
+    if not timed_out:
+        for s, e, _raw in find_ssn_spans(text):
+            if _over_budget():
+                timed_out = True
+                break
+            out.append(
+                Finding(
+                    type=FindingType.SSN,
+                    severity=Severity.HIGH,
+                    start=s,
+                    end=e,
+                    snippet=text[s:e],
+                    action_suggested=None,
+                    norm_span=None,
+                )
             )
-        )
-    return out
+    return out, timed_out
 
 
 def _only_digits(s: str) -> str:

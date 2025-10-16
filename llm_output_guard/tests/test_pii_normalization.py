@@ -8,7 +8,8 @@ def _kinds(findings):
 
 def test_email_and_phone_detected():
     s = "Reach me at Foo.Bar+dev@Example.COM or +14155550123"
-    kinds = _kinds(scan_pii(s))
+    pii_findings, _ = scan_pii(s)
+    kinds = _kinds(pii_findings)
     assert "email" in kinds
     assert "phone_e164" in kinds
 

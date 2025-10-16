@@ -9,13 +9,12 @@ class FindingType(str, Enum):
     PHONE_E164 = "phone_e164"
     CREDIT_CARD = "credit_card"
     SSN = "ssn"
-    SECRET_PREFIX = "secret.known_prefix"
-    SECRET_ENTROPY = "secret.high_entropy"
-    JWT = "secret.jwt"
-    PEM = "secret.pem"
     TOOL_SHELL = "tools.shell"
     TOOL_SQL_DROP = "tools.sql_drop"
     PROMPT_LEAK = "prompt.leak_prompt"
+    SECRET_PREFIX = "secret_prefix"
+    JWT_TOKEN = "jwt_token"
+    PEM_KEY = "pem_key"
 
 
 class Severity(str, Enum):
@@ -49,3 +48,9 @@ class ScanResult:
     text: str
     findings: list[Finding]
     blocked: bool
+    truncated: bool = False
+    scanned_bytes: Optional[int] = None
+    findings_count: int = 0  # total before capping
+    findings_capped: bool = False
+    timed_out: bool = False
+    detect_time_ms: Optional[float] = None

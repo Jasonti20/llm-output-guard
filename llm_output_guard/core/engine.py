@@ -3,6 +3,10 @@ from ..policy.loader import load_policy
 from ..policy.model import decide
 from ..types import ScanResult
 
+MAX_SCAN_BYTES = 200_000  # ~200 KB cap for scanning
+MAX_FINDINGS = 200  # max findings to return
+DETECT_BUDGET_MS = 40.0  # max time to spend in detection (not enforced)
+
 
 def _clamp(a: int, lo: int, hi: int) -> int:
     return lo if a < lo else hi if a > hi else a
@@ -73,20 +77,54 @@ def redact_text(
 
 
 def scan_and_apply(text: str, profile: str = "balanced") -> ScanResult:
-    policy = load_policy(profile)
+    import time
+
     # Import here to avoid circular imports at module load
     from ..detectors.pii import scan_pii
+    from ..detectors.secrets import scan_secrets
 
+    
+    t0 = time.perf_counter()
+    
+    deadline = t0 + (DETECT_BUDGET_MS / 1000.0)
+    
+    policy = load_policy(profile)
+    raw_bytes = text.encode("utf-8", errors="ignore")
+    truncated = False
+    if len(raw_bytes) > MAX_SCAN_BYTES:
+        truncated = True
+        raw_bytes = raw_bytes[:MAX_SCAN_BYTES]
+        text = raw_bytes.decode("utf-8", errors="ignore")
     policy = load_policy(profile)
     email_rule = policy.rules.get("email")
-    email_allow = (email_rule.allowlist if email_rule and email_rule.allowlist else [])
-    findings = scan_pii(text, email_allowlist=email_allow)
+    email_allow = email_rule.allowlist if email_rule and email_rule.allowlist else []
+    pii_findings, pii_timed_out = scan_pii(text, email_allowlist=email_allow, deadline=deadline)
+    sec_findings, sec_timed_out = scan_secrets(text, deadline=deadline)
+    findings = pii_findings + sec_findings
+    total_findings = len(findings)
+    findings_capped = False
+    if total_findings > MAX_FINDINGS:
+        findings = findings[:MAX_FINDINGS]
+        findings_capped = True
 
+    timed_out = bool(pii_timed_out or sec_timed_out)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    
     # if any finding's rule is "block" -> block
     for f in findings:
         rule = decide(policy, f.type.value)
         if rule and rule.action == "block":
-            return ScanResult(text=text, findings=findings, blocked=True)
+            return ScanResult(
+                text=text,
+                findings=findings,
+                blocked=True,
+                truncated=truncated,
+                scanned_bytes=len(raw_bytes),
+                findings_count=total_findings,
+                findings_capped=findings_capped,
+                timed_out=timed_out,
+                detect_time_ms=elapsed_ms,
+            )
 
     # Collect per-finding edits: (start, end, preserve_len, keep_last_n)
     edits: list[tuple[int, int, bool, int]] = []
@@ -111,4 +149,14 @@ def scan_and_apply(text: str, profile: str = "balanced") -> ScanResult:
             repl = _mask_slice(out[s:e], preserve_len, keep_last_n, "*")
             out = out[:s] + repl + out[e:]
 
-    return ScanResult(text=out, findings=findings, blocked=False)
+    return ScanResult(
+        text=out,
+        findings=findings,
+        blocked=False,
+        truncated=truncated,
+        scanned_bytes=len(raw_bytes),
+        findings_count=total_findings,
+        findings_capped=findings_capped,
+        timed_out=timed_out,
+        detect_time_ms=elapsed_ms,
+    )
