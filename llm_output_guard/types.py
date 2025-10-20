@@ -54,3 +54,4 @@ class ScanResult:
     findings_capped: bool = False
     timed_out: bool = False
     detect_time_ms: Optional[float] = None
+
