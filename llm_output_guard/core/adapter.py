@@ -2,6 +2,8 @@ from __future__ import annotations
 import json
 from typing import Any, Tuple, Dict
 from .engine import scan_and_apply
+from ..policy.loader import load_policy
+from ..policy.model import decide
 
 
 class GuardReport:
@@ -57,16 +59,67 @@ def scan_json_as_text(obj: Any, *, profile: str = "balanced") -> GuardReport:
     return scan_text_only(serialized, profile=profile)
 
 
-def apply_text(text: str, *, profile: str = "balanced") -> Tuple[str, str, GuardReport]:
+def apply_text(
+    text: str,
+    *,
+    profile: str = "balanced",
+    coerce_block_to_redact: bool = False,
+) -> Tuple[str, str, GuardReport]:
     """
     Returns (action, out_text, report) where action in {"block","redact","pass"}.
-    Uses engine.scan_and_apply which can redact and/or mark blocked.
+    If coerce_block_to_redact=True and the engine blocks without redacting,
+    we will *actively redact* the blocked spans before returning (streaming safety).
     """
     result = scan_and_apply(text, profile=profile)
     action = (
         "block" if result.blocked else ("redact" if (result.text != text) else "pass")
     )
-    return action, result.text, _to_report(result)
+    out_text = result.text
+    # Streaming safety: never leak when blocked
+    if result.blocked and coerce_block_to_redact:
+        # Build a redacted view using the policy (treat both 'block' and 'redact' as maskable)
+        policy = load_policy(profile)
+
+        def _mast_slice(
+            seg: str, preserve_len: bool, keep_last_n: int, mask_char: str = "*"
+        ) -> str:
+            if not preserve_len:
+                if keep_last_n <= 0:
+                    return mask_char
+                return mask_char + seg[-keep_last_n:]
+            n = len(seg)
+            keep = max(0, min(keep_last_n, n))
+            return (mask_char * (n - keep)) + (seg[-keep:] if keep else "")
+
+        edits: list[tuple[int, int, bool, int]] = []
+
+        for f in getattr(result, "findings", []) or []:
+            rule = decide(policy, f.type.value)
+            if not rule:
+                continue
+            if rule.action in ("block", "redact"):
+                preserve_len = (
+                    bool(rule.preserve_len) if rule.preserve_len is not None else False
+                )
+                keep_last_n = int(rule.keep_last_n or 0)
+                edits.append((f.start, f.end, preserve_len, keep_last_n))
+
+            out = text
+            for s, e, preserve_len, keep_last_n in sorted(
+                edits, key=lambda t: (t[0], t[1]), reverse=True
+            ):
+                s = max(0, min(len(out), s))
+                e = max(0, min(len(out), e))
+                if e > s:
+                    out = (
+                        out[:s]
+                        + _mast_slice(out[s:e], preserve_len, keep_last_n, "*")
+                        + out[e:]
+                    )
+
+        out_text = out
+        action = "redact"
+    return action, out_text, _to_report(result)
 
 
 def apply_json_values(

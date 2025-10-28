@@ -20,7 +20,8 @@ EMAIL_RE = re.compile(
 
 # E.164: + followed by 8–15 digits (conservative)
 PHONE_E164_RE = re.compile(r"\B\+[0-9]{8,15}\b")
-_DIGIT_RE = re.compile(r"\d")
+# 13–19 digits with optional single separators (space or dash) between digits
+CC_RE = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
 _SSN_DASHED = re.compile(
     r"(?<!\d)(?!000|666|9\d{2})(\d{3})-(?!00)(\d{2})-(?!0000)(\d{4})(?!\d)",
     flags=re.ASCII,
@@ -35,6 +36,33 @@ def _email_allowed(addr: str, allowlist: List[str]) -> bool:
         if p.startswith("@") and a.endswith(p):
             return True
     return False
+
+
+def _digits_only(s: str) -> str:
+    return "".join(ch for ch in s if "0" <= ch <= "9")
+
+
+def _scan_credit_cards(norm_text: str, text: str, map_norm_to_orig) -> List[Finding]:
+    out: List[Finding] = []
+    for m in CC_RE.finditer(norm_text):
+        ns, ne = m.span()
+        os, oe = to_original_span(ns, ne, map_norm_to_orig)
+        raw = text[os:oe]
+        digits = _digits_only(raw)
+        # length guard + Luhn to cut false positives
+        if 13 <= len(digits) <= 19 and luhn_ok(digits):
+            out.append(
+                Finding(
+                    type=FindingType.CREDIT_CARD,
+                    severity=Severity.HIGH,
+                    start=os,
+                    end=oe,
+                    snippet=raw,
+                    action_suggested=Action.BLOCK,  # policy may map to redact-or-block
+                    norm_span=(ns, ne),
+                )
+            )
+    return out
 
 
 def scan_pii(
@@ -96,6 +124,9 @@ def scan_pii(
                     norm_span=(ns, ne),
                 )
             )
+    # Credit cards (detected on NORMALIZED, mapped to ORIGINAL)
+    if not timed_out:
+        out.extend(_scan_credit_cards(norm, text, map_norm_to_orig))
 
     # SSN (dashed & no-dash) — detect on NORMALIZED or ORIGINAL?
     # We detect on ORIGINAL here since the SSN regex is ASCII-stable.
