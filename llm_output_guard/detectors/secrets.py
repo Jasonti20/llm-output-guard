@@ -75,6 +75,10 @@ PEM_RE = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH |PRIVATE |ENCRYPTED )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |OPENSSH |PRIVATE |ENCRYPTED )?PRIVATE KEY-----",
     re.ASCII | re.IGNORECASE,
 )
+# Header-only detector for streaming: triggers on BEGIN line alone (no END required)
+PEM_BEGIN_RE = re.compile(
+    r"-----BEGIN\s+(?:(?:RSA|EC|OPENSSH|PRIVATE|ENCRYPTED)\s+)?PRIVATE\s+KEY-----"
+)
 
 
 def scan_secrets(
@@ -129,6 +133,25 @@ def scan_secrets(
     # PEM keys (treat as CRITICAL)
     if not timed_out:
         for m in PEM_RE.finditer(norm):
+            if _over_budget():
+                timed_out = True
+                break
+            ns, ne = m.span()
+            os, oe = to_original_span(ns, ne, map_norm_to_orig)
+            findings.append(
+                Finding(
+                    type=FindingType.PEM_KEY,
+                    severity=Severity.CRITICAL,
+                    start=os,
+                    end=oe,
+                    snippet=text[os:oe],
+                    action_suggested=Action.BLOCK,
+                    norm_span=(ns, ne),
+                )
+            )
+    # PEM header-only (streaming, partial block): fail-closed as CRITICAL immediately
+    if not timed_out:
+        for m in PEM_BEGIN_RE.finditer(norm):
             if _over_budget():
                 timed_out = True
                 break

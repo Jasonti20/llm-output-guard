@@ -18,11 +18,11 @@ def _is_text_like(content_type: Optional[str]) -> bool:
 
 class StreamingOutputGuardMiddleware:
     """
-    Phase 1 (redact-only):
+    Streaming guard:
       - Intercepts streaming text/SSE/JSON-ish responses.
       - Maintains a redacted rolling buffer across body frames.
-      - Uses adapter.apply_text(profile=...) each frame.
-      - If engine says 'block', we still *redact* for now (abort logic in next step).
+       - Uses adapter.apply_text(profile=...) each frame.
+      - Redacts inline; if a CRITICAL finding is detected and block_critical_stream=True, stop the stream immediately.
     """
 
     def __init__(
@@ -31,10 +31,14 @@ class StreamingOutputGuardMiddleware:
         *,
         profile: str = "balanced",
         buffer_chars: int = DEFAULT_BUFFER_CHARS,
+        block_critical_stream: bool = False,
+        sse_error_message: str = "LLM Output Guard: critical content detected; stream stopped.",
     ):
         self.app = app
         self.profile = profile
         self.buffer_chars = buffer_chars
+        self.block_critical_stream = block_critical_stream
+        self.sse_error_message = sse_error_message
 
     async def __call__(
         self,
@@ -49,9 +53,10 @@ class StreamingOutputGuardMiddleware:
         inc_decoder = None
         inc_encoder = None
         rolling = ""  # keep the *redacted* rolling buffer
+        aborted = False
 
         async def guarded_send(message: Dict[str, Any]):
-            nonlocal content_type, inc_decoder, inc_encoder, rolling
+            nonlocal content_type, inc_decoder, inc_encoder, rolling, aborted
 
             mtype = message.get("type")
             if mtype == "http.response.start":
@@ -67,6 +72,9 @@ class StreamingOutputGuardMiddleware:
 
             if mtype != "http.response.body":
                 await send(message)
+                return
+            if aborted:
+                # drop further body frames once aborted
                 return
 
             body: bytes = message.get("body", b"")
@@ -92,7 +100,7 @@ class StreamingOutputGuardMiddleware:
                 rolling = rolling[-self.buffer_chars :]
 
             # Redact the entire rolling buffer using your engine
-            action, redacted_full, _report = apply_text(
+            action, redacted_full, report = apply_text(
                 rolling, profile=self.profile, coerce_block_to_redact=True
             )
 
@@ -104,6 +112,29 @@ class StreamingOutputGuardMiddleware:
                 if tail_len <= len(redacted_full)
                 else redacted_full
             )
+
+            # Must-stop: end stream when a critical finding is present
+            if self.block_critical_stream and getattr(report, "critical", False):
+                if content_type and "text/event-stream" in content_type.lower():
+                    payload = f"event: error\ndata: {self.sse_error_message}\n\n"
+                    await send(
+                        {
+                            "type": "http.response.body",
+                            "body": payload.encode("utf-8"),
+                            "more_body": False,
+                        }
+                    )
+                else:
+                    placeholder = "[stream stopped: sensitive content]\n"
+                    await send(
+                        {
+                            "type": "http.response.body",
+                            "body": placeholder.encode("utf-8"),
+                            "more_body": False,
+                        }
+                    )
+                aborted = True
+                return
 
             # Re-encode and send
             out_bytes = inc_encoder.encode(emit_segment, final=False)

@@ -13,6 +13,7 @@ class GuardReport:
         "truncated",
         "timed_out",
         "detect_time_ms",
+        "critical",
     )
 
     def __init__(
@@ -22,12 +23,14 @@ class GuardReport:
         truncated: bool,
         timed_out: bool,
         detect_time_ms: float,
+        critical: bool = False,
     ):
         self.findings_count = findings_count
         self.blocked = blocked
         self.truncated = truncated
         self.timed_out = timed_out
         self.detect_time_ms = detect_time_ms
+        self.critical = critical
 
 
 def _to_report(result) -> GuardReport:
@@ -38,6 +41,7 @@ def _to_report(result) -> GuardReport:
         truncated=bool(getattr(result, "truncated", False)),
         timed_out=bool(getattr(result, "timed_out", False)),
         detect_time_ms=float(getattr(result, "detect_time_ms", 0.0) or 0.0),
+        critical=bool(getattr(result, "critical", False)),
     )
 
 
@@ -71,16 +75,24 @@ def apply_text(
     we will *actively redact* the blocked spans before returning (streaming safety).
     """
     result = scan_and_apply(text, profile=profile)
+    policy = load_policy(profile)
+    # Mark "critical" if any finding maps to a rule with severity=critical
+    critical_hit = False
+    for f in getattr(result, "findings", []) or []:
+        rule = decide(policy, f.type.value)
+        if rule and str(getattr(rule, "severity", "")).lower() == "critical":
+            critical_hit = True
+            break
+    setattr(result, "critical", critical_hit)
+
     action = (
         "block" if result.blocked else ("redact" if (result.text != text) else "pass")
     )
     out_text = result.text
     # Streaming safety: never leak when blocked
     if result.blocked and coerce_block_to_redact:
-        # Build a redacted view using the policy (treat both 'block' and 'redact' as maskable)
-        policy = load_policy(profile)
 
-        def _mast_slice(
+        def _mask_slice(
             seg: str, preserve_len: bool, keep_last_n: int, mask_char: str = "*"
         ) -> str:
             if not preserve_len:
@@ -104,18 +116,19 @@ def apply_text(
                 keep_last_n = int(rule.keep_last_n or 0)
                 edits.append((f.start, f.end, preserve_len, keep_last_n))
 
-            out = text
-            for s, e, preserve_len, keep_last_n in sorted(
-                edits, key=lambda t: (t[0], t[1]), reverse=True
-            ):
-                s = max(0, min(len(out), s))
-                e = max(0, min(len(out), e))
-                if e > s:
-                    out = (
-                        out[:s]
-                        + _mast_slice(out[s:e], preserve_len, keep_last_n, "*")
-                        + out[e:]
-                    )
+        # Apply all masks once, in reverse order
+        out = text
+        for s, e, preserve_len, keep_last_n in sorted(
+            edits, key=lambda t: (t[0], t[1]), reverse=True
+        ):
+            s = max(0, min(len(out), s))
+            e = max(0, min(len(out), e))
+            if e > s:
+                out = (
+                    out[:s]
+                    + _mask_slice(out[s:e], preserve_len, keep_last_n, "*")
+                    + out[e:]
+                )
 
         out_text = out
         action = "redact"
