@@ -4,6 +4,7 @@ from typing import Any, Tuple, Dict
 from .engine import scan_and_apply
 from ..policy.loader import load_policy
 from ..policy.model import decide
+from ..io.findings import serialize_findings_safe
 
 
 class GuardReport:
@@ -182,3 +183,18 @@ def apply_json_values(
         detect_time_ms=detect_ms_total,
     )
     return action, new_obj, report
+
+
+def summarize_findings(
+    text: str,
+    result: Any,
+    *,
+    profile: str = "balanced",
+    max_snippet: int = 64,
+):
+    return serialize_findings_safe(
+        text,
+        getattr(result, "findings", []) or [],
+        profile=profile,
+        max_snippet=max_snippet,
+    )

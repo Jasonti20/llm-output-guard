@@ -55,3 +55,8 @@ class ScanResult:
     timed_out: bool = False
     detect_time_ms: Optional[float] = None
 
+
+# ---- Public headers for observability (HTTP polish & DX) ----
+HEADER_FINDINGS = "X-LLM-Guard-Findings"
+HEADER_ACTION = "X-LLM-Guard-Action"
+HEADER_ERROR = "X-LLM-Guard-Error"

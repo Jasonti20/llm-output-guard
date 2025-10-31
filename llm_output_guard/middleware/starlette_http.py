@@ -6,7 +6,10 @@ from starlette.types import ASGIApp, Scope, Receive, Send, Message
 from llm_output_guard.core.adapter import (
     apply_text,
     apply_json_values,
+    summarize_findings,
 )
+from llm_output_guard.core.engine import scan_and_apply
+from llm_output_guard.types import HEADER_FINDINGS, HEADER_ACTION, HEADER_ERROR
 
 TEXT_CT_PREFIXES = ("text/",)
 JSON_CT = "application/json"
@@ -19,9 +22,22 @@ class OutputGuardMiddleware:
     run detection ONLY, and add headers. Do NOT mutate body or block yet.
     """
 
-    def __init__(self, app: ASGIApp, *, profile: str = "balanced"):
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        profile: str = "balanced",
+        block_status_code: int = 422,
+        coerce_block_to_redact: bool = False,
+        max_snippet: int = 64,
+        include_debug_headers: bool = False,
+    ):
         self.app = app
         self.profile = profile
+        self.block_status_code = block_status_code
+        self.coerce_block_to_redact = coerce_block_to_redact
+        self.max_snippet = max_snippet
+        self.include_debug_headers = include_debug_headers
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -95,17 +111,30 @@ class OutputGuardMiddleware:
                 except Exception:
                     # If invalid JSON, treat as text
                     text = scan_payload.decode(charset, errors="replace")
-                    action, out_text, rep = apply_text(text, profile=self.profile)
+                    action, out_text, rep = apply_text(
+                        text,
+                        profile=self.profile,
+                        coerce_block_to_redact=self.coerce_block_to_redact,
+                    )
                     redacted_bytes = out_text.encode(charset, errors="replace")
+                    original_for_findings = text
+                    original_is_json = False
                 else:
                     action, out_obj, rep = apply_json_values(obj, profile=self.profile)
-                    redacted_bytes = json.dumps(out_obj, ensure_ascii=False).encode(
-                        "utf-8"
+                    redacted_bytes = json.dumps(out_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    original_for_findings = json.dumps(
+                        obj, ensure_ascii=False, separators=(",", ":")
                     )
             else:
                 text = scan_payload.decode(charset, errors="replace")
-                action, out_text, rep = apply_text(text, profile=self.profile)
+                action, out_text, rep = apply_text(
+                    text,
+                    profile=self.profile,
+                    coerce_block_to_redact=self.coerce_block_to_redact,
+                )
                 redacted_bytes = out_text.encode(charset, errors="replace")
+                original_for_findings = text
+                original_is_json = False
 
             if rep:
                 findings_count = int(rep.findings_count)
@@ -116,7 +145,7 @@ class OutputGuardMiddleware:
         except Exception as e:
             headers = _set_header(
                 headers,
-                b"x-llm-output-guard-error",
+                HEADER_ERROR.encode("latin-1"),
                 str(type(e).__name__).encode("latin-1"),
             )
             # Fail-open: return original body
@@ -130,44 +159,63 @@ class OutputGuardMiddleware:
             await send({"type": "http.response.body", "body": body, "more_body": False})
             return
 
-        # Enforce action
+        # Base public headers
         headers = _set_header(
-            headers, b"x-llm-guard-findings", str(findings_count).encode("latin-1")
-        )
-        headers = _set_header(headers, b"x-llm-guard-action", action.encode("latin-1"))
-        headers = _set_header(
-            headers, b"x-llm-guard-blocked", b"true" if blocked else b"false"
+            headers,
+            HEADER_FINDINGS.encode("latin-1"),
+            str(findings_count).encode("latin-1"),
         )
         headers = _set_header(
-            headers, b"x-llm-guard-timedout", b"true" if timed_out else b"false"
+            headers, HEADER_ACTION.encode("latin-1"), action.encode("latin-1")
         )
-        headers = _set_header(
-            headers, b"x-llm-guard-detectms", f"{detect_ms:.2f}".encode("latin-1")
-        )
-        headers = _set_header(
-            headers, b"x-llm-guard-profile", self.profile.encode("latin-1")
-        )
-        if truncated_by_mw:
-            headers = _set_header(headers, b"x-llm-guard-truncated", b"true")
+        # Optional debug headers (off by default)
+        if self.include_debug_headers:
+            headers = _set_header(
+                headers, b"x-llm-guard-blocked", b"true" if blocked else b"false"
+            )
+            headers = _set_header(
+                headers, b"x-llm-guard-timedout", b"true" if timed_out else b"false"
+            )
+            headers = _set_header(
+                headers, b"x-llm-guard-detectms", f"{detect_ms:.2f}".encode("latin-1")
+            )
+            headers = _set_header(
+                headers, b"x-llm-guard-profile", self.profile.encode("latin-1")
+            )
+            if truncated_by_mw:
+                headers = _set_header(headers, b"x-llm-guard-truncated", b"true")
 
         if action == "block":
+            # Compute safe findings (masked, short snippets) from the ORIGINAL text we scanned
+            result = scan_and_apply(original_for_findings, profile=self.profile)
+            safe_findings = summarize_findings(
+                original_for_findings,
+                result,
+                profile=self.profile,
+                max_snippet=self.max_snippet,
+            )
             payload = json.dumps(
                 {
-                    "error": "output_blocked",
-                    "message": "Policy blocked risky content.",
-                    "findings": findings_count,
+                    "error": "blocked_by_llm_output_guard",
+                    "message": "Output contained sensitive or risky content per policy.",
+                    "findings": safe_findings,
                 },
                 ensure_ascii=False,
             ).encode("utf-8")
             headers = _set_header(headers, b"content-type", JSON_CT.encode("latin-1"))
             headers = _set_or_drop_content_length(headers, len(payload))
             await send(
-                {"type": "http.response.start", "status": 422, "headers": headers}
+                {
+                    "type": "http.response.start",
+                    "status": self.block_status_code,
+                    "headers": headers,
+                }
             )
             await send(
                 {"type": "http.response.body", "body": payload, "more_body": False}
             )
             return
+
         # redact or pass
         final_body = redacted_bytes if action == "redact" else body
         headers = _set_or_drop_content_length(headers, len(final_body))
