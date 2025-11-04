@@ -61,3 +61,9 @@ def load_policy(profile: str = "balanced", yaml_text: str | None = None) -> Poli
     text = yaml_text if yaml_text is not None else _DEFAULT_YAML
     data = yaml.safe_load(text) or {}
     return _parse_profile(data, profile)
+
+
+def load_policy_from_file(path: str, profile: str = "balanced") -> Policy:
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    return load_policy(profile=profile, yaml_text=text)

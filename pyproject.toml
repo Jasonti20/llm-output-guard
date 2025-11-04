@@ -54,3 +54,6 @@ strict_optional = true
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-q"
+
+[project.scripts]
+guard = "llm_output_guard.cli.main:main"

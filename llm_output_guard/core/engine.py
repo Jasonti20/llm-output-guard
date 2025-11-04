@@ -76,29 +76,30 @@ def redact_text(
     return out
 
 
-def scan_and_apply(text: str, profile: str = "balanced") -> ScanResult:
+def scan_and_apply(text: str, profile: str = "balanced", policy_obj=None) -> ScanResult:
     import time
 
     # Import here to avoid circular imports at module load
     from ..detectors.pii import scan_pii
     from ..detectors.secrets import scan_secrets
 
-    
     t0 = time.perf_counter()
-    
+
     deadline = t0 + (DETECT_BUDGET_MS / 1000.0)
-    
-    policy = load_policy(profile)
+
+    policy = policy_obj if policy_obj is not None else load_policy(profile)
     raw_bytes = text.encode("utf-8", errors="ignore")
     truncated = False
     if len(raw_bytes) > MAX_SCAN_BYTES:
         truncated = True
         raw_bytes = raw_bytes[:MAX_SCAN_BYTES]
         text = raw_bytes.decode("utf-8", errors="ignore")
-    policy = load_policy(profile)
+
     email_rule = policy.rules.get("email")
     email_allow = email_rule.allowlist if email_rule and email_rule.allowlist else []
-    pii_findings, pii_timed_out = scan_pii(text, email_allowlist=email_allow, deadline=deadline)
+    pii_findings, pii_timed_out = scan_pii(
+        text, email_allowlist=email_allow, deadline=deadline
+    )
     sec_findings, sec_timed_out = scan_secrets(text, deadline=deadline)
     findings = pii_findings + sec_findings
     total_findings = len(findings)
@@ -109,7 +110,7 @@ def scan_and_apply(text: str, profile: str = "balanced") -> ScanResult:
 
     timed_out = bool(pii_timed_out or sec_timed_out)
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    
+
     # if any finding's rule is "block" -> block
     for f in findings:
         rule = decide(policy, f.type.value)
