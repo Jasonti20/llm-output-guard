@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: llm-output-guard-scan
+        name: LLM Output Guard (md/txt/json)
+        entry: bash
+        args:
+          - -c
+          - |
+            ec=0
+            for f in "$@"; do
+              case "$f" in
+                *.md|*.markdown|*.txt|*.json)
+                  echo "[guard] scanning $f"
+                  python -m llm_output_guard.cli.main scan --in "$f" --format pretty
+                  rc=$?
+                  if [ $rc -ge 2 ]; then ec=$rc; fi
+                  ;;
+                *) ;;
+              esac
+            done
+            exit ${ec:-0}
+        language: system
+        pass_filenames: true
+        require_serial: false
+        stages: [pre-commit]

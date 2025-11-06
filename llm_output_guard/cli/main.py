@@ -10,8 +10,9 @@ from typing import Literal, Optional, List
 from llm_output_guard.core.engine import scan_and_apply
 from llm_output_guard.policy.loader import load_policy, load_policy_from_file
 from llm_output_guard.io.findings import serialize_findings_safe
+from llm_output_guard.io.sarif import rows_to_sarif
 
-Fmt = Literal["json", "pretty"]
+Fmt = Literal["json", "pretty", "sarif"]
 _ACTION_RANK = {"none": 0, "flag": 1, "redact": 2, "block": 3, "quarantine": 3}
 
 
@@ -59,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument(
         "--format",
         dest="fmt",
-        choices=["json", "pretty"],
+        choices=["json", "pretty", "sarif"],
         default="pretty",
         help="Output format.",
     )
@@ -130,6 +131,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "findings": rows,
             }
             print(json.dumps(payload, ensure_ascii=False, indent=2))
+        elif args.fmt == "sarif":
+            sarif = rows_to_sarif(
+                rows,
+                artifact_uri=(args.in_path if args.in_path != "-" else "STDIN"),
+                policy_profile=args.profile,
+            )
+            print(json.dumps(sarif, ensure_ascii=False, indent=2))
         else:
             print(_pretty(rows, summary))
 
