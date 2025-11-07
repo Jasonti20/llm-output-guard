@@ -1,0 +1,19 @@
+{
+  "action": "block",
+  "findings": 1,
+  "truncated": false,
+  "timed_out": false,
+  "detect_ms": 1.8979579908773303,
+  "rows": [
+    {
+      "type": "credit_card",
+      "span": [
+        31,
+        50
+      ],
+      "action": "block",
+      "severity": "high",
+      "snippet": "███████████████1111"
+    }
+  ]
+}

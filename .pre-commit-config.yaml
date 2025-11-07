@@ -7,13 +7,30 @@ repos:
         args:
           - -c
           - |
+            ROOT="$(git rev-parse --show-toplevel)"
+            PY="$ROOT/.venv/bin/python"
+            if [ ! -x "$PY" ]; then
+              PY="$(command -v python3 || command -v python || true)"
+            fi
+            if [ -z "$PY" ]; then
+              echo "[guard] ERROR: No python interpreter found" >&2
+              exit 127
+            fi
+
             ec=0
             for f in "$@"; do
-              case "$f" in
+              # make path relative to repo root so pattern matches are stable
+              rel="${f#$ROOT/}"
+
+              case "$rel" in
+                # hard-skip our known-risky traces
+                examples/traces_before_after/*) continue ;;
+                # scan only text-ish files
                 *.md|*.markdown|*.txt|*.json)
-                  echo "[guard] scanning $f"
-                  python -m llm_output_guard.cli.main scan --in "$f" --format pretty
+                  echo "[guard] scanning $rel"
+                  "$PY" -m llm_output_guard.cli.main scan --in "$f" --format pretty
                   rc=$?
+                  # fail commit on redact(2) or block(3)
                   if [ $rc -ge 2 ]; then ec=$rc; fi
                   ;;
                 *) ;;
@@ -24,3 +41,6 @@ repos:
         pass_filenames: true
         require_serial: false
         stages: [pre-commit]
+        # optional backup regex; fine to keep
+        exclude: |
+          ^examples/traces_before_after/.*

@@ -1,0 +1,29 @@
+{
+  "action": "block",
+  "findings": 2,
+  "truncated": false,
+  "timed_out": false,
+  "detect_ms": 1.762000028975308,
+  "rows": [
+    {
+      "type": "pem_key",
+      "span": [
+        31,
+        206
+      ],
+      "action": "block",
+      "severity": "critical",
+      "snippet": "█"
+    },
+    {
+      "type": "pem_key",
+      "span": [
+        31,
+        58
+      ],
+      "action": "block",
+      "severity": "critical",
+      "snippet": "█"
+    }
+  ]
+}

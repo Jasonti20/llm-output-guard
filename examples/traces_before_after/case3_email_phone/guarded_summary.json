@@ -1,0 +1,19 @@
+{
+  "action": "redact",
+  "findings": 1,
+  "truncated": false,
+  "timed_out": false,
+  "detect_ms": 1.6770419897511601,
+  "rows": [
+    {
+      "type": "email",
+      "span": [
+        14,
+        34
+      ],
+      "action": "redact",
+      "severity": "medium",
+      "snippet": "█"
+    }
+  ]
+}
