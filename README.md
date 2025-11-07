@@ -13,3 +13,7 @@ Starlette middleware + CLI to scan/block/redact risky LLM outputs (PII, secrets,
 ## Install (dev)
 ```bash
 pip install -e .
+
+### Red-Team dataset
+See `examples/redteam.jsonl` for 10 prompts (jailbreak, secrets, command suggestions, encodings).  
+Used by the Step 11 red-team runner to compare guard **OFF vs ON**.
