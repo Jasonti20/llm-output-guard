@@ -18,6 +18,12 @@ profiles:
     secret_prefix: { action: block, severity: high }
     jwt_token:     { action: block, severity: high }
     pem_key:       { action: block, severity: critical }
+    
+    # Tools / Prompt injection (new)
+    tools.shell:    { action: block, severity: critical, allowlist: ["echo","ls"] }
+    tools.sql_drop: { action: block, severity: high }
+    prompt.leak_prompt: { action: block, severity: high }
+
   strict:
     credit_card: { action: block, severity: high, preserve_len: true, keep_last_n: 4 }
     ssn:         { action: block, severity: high, preserve_len: true }
@@ -26,6 +32,10 @@ profiles:
     secret_prefix: { action: block, severity: high }
     jwt_token:     { action: block, severity: high }
     pem_key:       { action: block, severity: critical }
+    tools.shell:    { action: block, severity: critical }
+    tools.sql_drop: { action: block, severity: high }
+    prompt.leak_prompt: { action: block, severity: high }
+    
   permissive:
     credit_card: { action: block, severity: high, preserve_len: true, keep_last_n: 4 }
     ssn:         { action: block, severity: high, preserve_len: true }
@@ -34,6 +44,9 @@ profiles:
     secret_prefix: { action: block, severity: high }
     jwt_token:     { action: block, severity: high }
     pem_key:       { action: block, severity: critical }
+    tools.shell:    { action: flag, severity: medium }
+    tools.sql_drop: { action: flag, severity: medium }
+    prompt.leak_prompt: { action: flag, severity: medium }
 """
 
 

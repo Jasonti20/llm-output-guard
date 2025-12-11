@@ -47,8 +47,11 @@ def estimate_entropy(s: str, window: int = 20) -> float:
 AKIA_RE = re.compile(
     r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16,20}(?![A-Za-z0-9])", re.ASCII | re.IGNORECASE
 )
+# OpenAI-style: accept sk-<env>-<token> and sk-<token>
+# Examples: sk-live-..., sk-test-..., sk-XXXXXXXXXXXXXXXXXXXXXXXX
 OPENAI_RE = re.compile(
-    r"(?<![A-Za-z0-9])sk-[A-Za-z0-9]{20,}(?![A-Za-z0-9])", re.ASCII | re.IGNORECASE
+    r"(?<![A-Za-z0-9])sk-(?:[A-Za-z]{2,10}-)?[A-Za-z0-9_-]{20,}(?![A-Za-z0-9])",
+    re.ASCII | re.IGNORECASE,
 )
 GITHUB_RE = re.compile(
     r"(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{20,}(?![A-Za-z0-9])", re.ASCII | re.IGNORECASE
@@ -57,11 +60,16 @@ SLACK_RE = re.compile(
     r"(?<![A-Za-z0-9])xoxb-[A-Za-z0-9-]{20,}(?![A-Za-z0-9])", re.ASCII | re.IGNORECASE
 )
 
+# --- AWS Secret Access Key (common “Secret=...” form in copy-pastes)
+# We keep it simple: grab reasonably long base64/hex-ish secrets after "Secret="
+AWS_SECRET_VALUE_RE = re.compile(r"(?i)\bSecret\s*=\s*([A-Za-z0-9+/=]{30,})")
+
 PREFIX_RES = [
     ("secret_prefix", AKIA_RE),
     ("secret_prefix", OPENAI_RE),
     ("secret_prefix", GITHUB_RE),
     ("secret_prefix", SLACK_RE),
+    ("secret_prefix", AWS_SECRET_VALUE_RE),
 ]
 
 # ---------- JWT detector (HIGH confidence) ----------
@@ -121,6 +129,14 @@ def scan_secrets(
             _emit(FindingType.SECRET_PREFIX, *m.span())
         if timed_out:
             break
+
+    # AWS Secret=... value (treat as secret_prefix category for policy)
+    if not timed_out:
+        for m in AWS_SECRET_VALUE_RE.finditer(norm):
+            if _over_budget():
+                timed_out = True
+                break
+            _emit(FindingType.SECRET_PREFIX, *m.span())
 
     # JWT tokens
     if not timed_out:

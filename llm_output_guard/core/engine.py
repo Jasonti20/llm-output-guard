@@ -78,10 +78,18 @@ def redact_text(
 
 def scan_and_apply(text: str, profile: str = "balanced", policy_obj=None) -> ScanResult:
     import time
+    from urllib.parse import unquote
 
     # Import here to avoid circular imports at module load
     from ..detectors.pii import scan_pii
     from ..detectors.secrets import scan_secrets
+    from ..detectors.tools import detect_tools
+
+    try:
+        # Make prompt detector optional; skip if the module isn’t present yet
+        from ..detectors.prompt import detect_prompt_leak
+    except Exception:
+        detect_prompt_leak = None
 
     t0 = time.perf_counter()
 
@@ -95,13 +103,22 @@ def scan_and_apply(text: str, profile: str = "balanced", policy_obj=None) -> Sca
         raw_bytes = raw_bytes[:MAX_SCAN_BYTES]
         text = raw_bytes.decode("utf-8", errors="ignore")
 
+    norm_text = unquote(text)
     email_rule = policy.rules.get("email")
     email_allow = email_rule.allowlist if email_rule and email_rule.allowlist else []
     pii_findings, pii_timed_out = scan_pii(
-        text, email_allowlist=email_allow, deadline=deadline
+        norm_text, email_allowlist=email_allow, deadline=deadline
     )
-    sec_findings, sec_timed_out = scan_secrets(text, deadline=deadline)
-    findings = pii_findings + sec_findings
+    sec_findings, sec_timed_out = scan_secrets(norm_text, deadline=deadline)
+    # Tools (shell/SQL/etc.) and Prompt-leak (optional)
+    tool_findings = detect_tools(norm_text) or []
+    prompt_findings = []
+    if detect_prompt_leak is not None:
+        try:
+            prompt_findings = detect_prompt_leak(norm_text) or []
+        except Exception:
+            prompt_findings = []
+    findings = pii_findings + sec_findings + tool_findings + prompt_findings
     total_findings = len(findings)
     findings_capped = False
     if total_findings > MAX_FINDINGS:

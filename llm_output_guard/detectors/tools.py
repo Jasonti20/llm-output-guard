@@ -1,11 +1,19 @@
 from __future__ import annotations
 import re
+import base64
+import binascii
+import urllib.parse
 from typing import List
 from llm_output_guard.types import Finding, FindingType, Severity
 
 # Notes:
 # - Patterns focus on *execution intent*: code fences, subshells, pipelines to sh, etc.
 # - Keep patterns precompiled and relatively safe; avoid catastrophic backtracking.
+
+# ---- Module knobs (defensive caps) ----
+MAX_FINDINGS_TOOLS = 100  # hard cap to avoid noise/DoS
+MAX_DECODE_BYTES = 4096  # skip huge decodes
+B64_MIN_LEN = 24  # ignore tiny base64-ish blobs
 
 # --- Shell indicators (UNIX-like) ---
 SHELL_CODE_FENCE = re.compile(r"(?ms)```(?:bash|sh|zsh)\s+(.+?)```")
@@ -45,6 +53,22 @@ POWERSHELL_INVOKE = re.compile(
     r"\bInvoke-Expression\b|\bIEX\b|\bInvoke-WebRequest\b|\bNew-Object\s+Net\.WebClient\b",
     flags=re.IGNORECASE,
 )
+# --- Markdown links / URLs / Encoded payloads ---
+MD_LINK = re.compile(r"\[([^\]]{1,200})\]\(([^)\s]{1,1000})\)", re.IGNORECASE)
+BARE_URL = re.compile(r"https?://[^\s)>'\"`]{4,}", re.IGNORECASE)
+URL_RISK_HINT = re.compile(
+    r"(evil\.example\.com|cmd=|rm%20\-rf|/exfil|/run\?|/install|/payload)",
+    re.IGNORECASE,
+)
+SUSPICIOUS_HOST = re.compile(
+    r"(evil\.example\.com|pastebin\.com|raw\.githubusercontent\.com)",
+    re.IGNORECASE,
+)
+BASE64_LIKE = re.compile(r"\b[A-Za-z0-9+/_-]{24,}={0,2}\b")
+POWERSHELL_ENC = re.compile(
+    r"\bpowershell(?:\.exe)?\s+(-enc|-encodedcommand)\s+([A-Za-z0-9+/=]{16,})",
+    re.IGNORECASE,
+)
 
 
 def _emit(
@@ -63,6 +87,54 @@ def _emit(
             )
         )
     return out
+
+
+def _emit_unique(existing: List[Finding], new_items: list[Finding]) -> list[Finding]:
+    """Merge, de-duplicating by (type,start,end)."""
+    seen = {(f.type, f.start, f.end) for f in existing}
+    out = existing[:]
+    for f in new_items:
+        if (f.type, f.start, f.end) in seen:
+            continue
+        out.append(f)
+        seen.add((f.type, f.start, f.end))
+        if len(out) >= MAX_FINDINGS_TOOLS:
+            break
+    return out
+
+
+def _safe_b64_decode(s: str) -> str | None:
+    try:
+        if len(s) > MAX_DECODE_BYTES:
+            return None
+        s_norm = s.replace("-", "+").replace("_", "/")
+        pad = (-len(s_norm)) % 4
+        if pad:
+            s_norm += "=" * pad
+        data = base64.b64decode(s_norm, validate=False)
+        if not data or len(data) > MAX_DECODE_BYTES:
+            return None
+        try:
+            return data.decode("utf-8", "ignore")
+        except Exception:
+            return data.decode("latin-1", "ignore")
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _scan_decoded_shell(decoded: str) -> bool:
+    """Reuse primary shell heuristics on decoded text."""
+    if PIPE_TO_SHELL.search(decoded):
+        return True
+    if RM_RF.search(decoded):
+        return True
+    if SYSTEM_CALLS.search(decoded):
+        return True
+    if SHELL_CHAIN.search(decoded):
+        return True
+    if POWERSHELL_INVOKE.search(decoded):
+        return True
+    return False
 
 
 def detect_tools(text: str) -> List[Finding]:
@@ -122,5 +194,59 @@ def detect_tools(text: str) -> List[Finding]:
     findings += _emit(
         POWERSHELL_INVOKE.finditer(text), ftype=shell, severity=Severity.HIGH, text=text
     )
+    # --- Markdown link deception / risky URLs ---
+    for m in MD_LINK.finditer(text):
+        url = m.group(2)
+        if URL_RISK_HINT.search(url) or SUSPICIOUS_HOST.search(url):
+            findings = _emit_unique(
+                findings, _emit([m], ftype=shell, severity=Severity.HIGH, text=text)
+            )
+            if len(findings) >= MAX_FINDINGS_TOOLS:
+                return findings
+
+    for m in BARE_URL.finditer(text):
+        url = m.group(0)
+        if URL_RISK_HINT.search(url) or SUSPICIOUS_HOST.search(url):
+            findings = _emit_unique(
+                findings, _emit([m], ftype=shell, severity=Severity.MEDIUM, text=text)
+            )
+            if len(findings) >= MAX_FINDINGS_TOOLS:
+                return findings
+    # --- URL-encoded payloads (curl%20http... or cmd=rm%20-rf) ---
+    for m in BARE_URL.finditer(text):
+        raw = m.group(0)
+        try:
+            decoded = urllib.parse.unquote(raw)
+        except Exception:
+            decoded = ""
+        if decoded and decoded != raw and _scan_decoded_shell(decoded):
+            findings = _emit_unique(
+                findings, _emit([m], ftype=shell, severity=Severity.HIGH, text=text)
+            )
+            if len(findings) >= MAX_FINDINGS_TOOLS:
+                return findings
+
+    # --- Base64 / PowerShell -enc blobs that decode to shell-y content ---
+    for m in BASE64_LIKE.finditer(text):
+        b = m.group(0)
+        if len(b) < B64_MIN_LEN:
+            continue
+        decoded = _safe_b64_decode(b)
+        if decoded and _scan_decoded_shell(decoded):
+            findings = _emit_unique(
+                findings, _emit([m], ftype=shell, severity=Severity.HIGH, text=text)
+            )
+            if len(findings) >= MAX_FINDINGS_TOOLS:
+                return findings
+
+    for m in POWERSHELL_ENC.finditer(text):
+        b = m.group(2)
+        decoded = _safe_b64_decode(b) or ""
+        sev = Severity.CRITICAL if _scan_decoded_shell(decoded) else Severity.HIGH
+        findings = _emit_unique(
+            findings, _emit([m], ftype=shell, severity=sev, text=text)
+        )
+        if len(findings) >= MAX_FINDINGS_TOOLS:
+            return findings
 
     return findings
