@@ -1,0 +1,4 @@
+id,question,answer,passages
+q001,What is Python?,Python is a high-level programming language created by Guido van Rossum.,Python is a programming language.|;|Guido van Rossum created Python in 1991.|;|It is widely used for web development.
+q002,When was Python released?,Python was first released in February 1991.,The first Python release was in February 1991.|;|Guido van Rossum started working on Python in the late 1980s.
+q003,What is RAG?,RAG stands for Retrieval-Augmented Generation and combines search with LLMs.,RAG (Retrieval-Augmented Generation) enhances LLM outputs.|;|It retrieves relevant documents before generating answers.
