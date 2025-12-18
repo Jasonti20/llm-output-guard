@@ -1,4 +1,5 @@
 import yaml
+from importlib import resources
 from .model import Policy, Rule
 
 _DEFAULT_YAML = """
@@ -50,6 +51,21 @@ profiles:
 """
 
 
+def _read_package_default_yaml() -> str | None:
+    """
+    Read llm_output_guard/policy/examples/policy.yaml if present.
+    Returns None if not available (e.g., early dev / missing package data).
+    """
+    try:
+        return (
+            resources.files("llm_output_guard.policy.examples")
+            .joinpath("policy.yaml")
+            .read_text(encoding="utf-8")
+        )
+    except Exception:
+        return None
+
+
 def _parse_profile(data: dict, profile: str) -> Policy:
     profiles = data.get("profiles") or {}
     raw = profiles.get(profile)
@@ -71,7 +87,11 @@ def _parse_profile(data: dict, profile: str) -> Policy:
 
 
 def load_policy(profile: str = "balanced", yaml_text: str | None = None) -> Policy:
-    text = yaml_text if yaml_text is not None else _DEFAULT_YAML
+    if yaml_text is not None:
+        text = yaml_text
+    else:
+        packaged = _read_package_default_yaml()
+        text = packaged if packaged is not None else _DEFAULT_YAML
     data = yaml.safe_load(text) or {}
     return _parse_profile(data, profile)
 

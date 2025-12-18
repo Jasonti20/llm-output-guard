@@ -36,9 +36,9 @@ dev = [
 # Ensure the llm_output_guard package (and subpackages) are discovered.
 include = ["llm_output_guard*"]
 
-# If you have non-Python files to ship (e.g., example policies), uncomment and adjust:
-# [tool.setuptools.package-data]
-# "llm_output_guard" = ["policy/examples/*.yaml"]
+# Ship the default policy YAML inside the wheel/sdist so loader.py can read it.
+[tool.setuptools.package-data]
+"llm_output_guard.policy" = ["policy/examples/*.yaml"]
 
 [tool.ruff]
 line-length = 100
@@ -54,6 +54,7 @@ strict_optional = true
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-q"
+pythonpath = ["."]
 
 [project.scripts]
 guard = "llm_output_guard.cli.main:main"

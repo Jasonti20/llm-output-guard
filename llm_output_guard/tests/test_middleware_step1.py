@@ -1,6 +1,6 @@
 # llm_output_guard/tests/test_middleware_step1.py
 from starlette.testclient import TestClient
-from llm_output_guard.examples.starlette_app import app
+from examples.starlette_app import app
 
 client = TestClient(app)
 
